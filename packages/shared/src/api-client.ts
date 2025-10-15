@@ -11,7 +11,7 @@ import type {
   AdminLinksResponse,
   TokensResponse,
   SettingsResponse,
-  
+
   // Request types
   LinksQuery,
   SearchQuery,
@@ -22,11 +22,9 @@ import type {
   AdminLoginRequest,
   CreateTokenRequest,
   BatchOperationRequest,
-  
+
   // Data types
   Link,
-  PendingLink,
-  AdminLink,
   ApiToken,
   StreamStatusMessage,
 } from './api'
@@ -50,7 +48,7 @@ export class MagpieApiClient {
   constructor(
     private baseUrl: string,
     private apiToken?: string
-  ) {}
+  ) { }
 
   private async request<T>(
     endpoint: string,
@@ -81,7 +79,7 @@ export class MagpieApiClient {
         params.append(key, String(value))
       }
     })
-    
+
     return this.request<LinksResponse>(`/api/links?${params}`)
   }
 
@@ -96,7 +94,7 @@ export class MagpieApiClient {
         params.append(key, String(value))
       }
     })
-    
+
     return this.request<SearchResponse>(`/api/search?${params}`)
   }
 
@@ -119,7 +117,7 @@ export class MagpieApiClient {
         params.append(key, String(value))
       }
     })
-    
+
     return fetch(`${this.baseUrl}/api/links/add?${params}`)
   }
 
@@ -140,14 +138,14 @@ export class MagpieApiClient {
     if (!reader) return
 
     const decoder = new TextDecoder()
-    
+
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
 
       const chunk = decoder.decode(value)
       const lines = chunk.split('\n')
-      
+
       for (const line of lines) {
         if (line.startsWith('data: ')) {
           try {
@@ -200,7 +198,7 @@ export class MagpieApiClient {
         params.append(key, String(value))
       }
     })
-    
+
     return this.request<AdminLinksResponse>(`/api/admin/links?${params}`)
   }
 
@@ -211,7 +209,7 @@ export class MagpieApiClient {
         params.append(key, String(value))
       }
     })
-    
+
     return this.request<TokensResponse>(`/api/admin/tokens?${params}`)
   }
 

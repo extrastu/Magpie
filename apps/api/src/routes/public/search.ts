@@ -70,7 +70,7 @@ app.get('/', zValidator('query', searchQuerySchema), async (c) => {
       : ftsCondition
 
     // 构建基础查询
-    const baseQuery = db
+    const baseQuery = (db as any)
       .select({
         id: links.id,
         url: links.url,
@@ -89,7 +89,7 @@ app.get('/', zValidator('query', searchQuerySchema), async (c) => {
       .where(combinedWhereClause)
 
     // 获取总数 - 使用相同的查询条件
-    const countQuery = db
+    const countQuery = (db as any)
       .select({ count: count() })
       .from(sql`links_fts`)
       .innerJoin(links, sql`links.id = links_fts.rowid`)
@@ -118,7 +118,7 @@ app.get('/', zValidator('query', searchQuerySchema), async (c) => {
       .offset(offset)
 
     // 格式化响应数据，添加搜索相关性和高亮
-    let results: SearchResult[] = searchResult.map((link) => {
+    let results: SearchResult[] = searchResult.map((link: any) => {
       const result: SearchResult = {
         id: link.id,
         url: link.url,
@@ -224,14 +224,14 @@ app.get('/suggestions', zValidator('query', suggestionsQuerySchema), async (c) =
       const statusCondition = eq(links.status, 'published')
       const titleWhereClause = and(ftsMatchCondition, statusCondition)
 
-      const titleSuggestions = await db
+      const titleSuggestions = await (db as any)
         .select({ title: links.title })
         .from(sql`links_fts`)
         .innerJoin(links, sql`links.id = links_fts.rowid`)
         .where(titleWhereClause)
         .limit(Math.ceil(limit / 3)) // 为每种类型分配部分配额
 
-      titleSuggestions.forEach(item => {
+      titleSuggestions.forEach((item: any) => {
         if (item.title && !suggestions.find(s => s.text === item.title)) {
           suggestions.push({
             text: item.title,
@@ -248,7 +248,7 @@ app.get('/suggestions', zValidator('query', suggestionsQuerySchema), async (c) =
       const statusCondition = eq(links.status, 'published')
       const categoryWhereClause = and(ftsMatchCondition, statusCondition)
 
-      const categorySuggestions = await db
+      const categorySuggestions = await (db as any)
         .select({
           category: links.userCategory,
           count: count()
@@ -259,7 +259,7 @@ app.get('/suggestions', zValidator('query', suggestionsQuerySchema), async (c) =
         .groupBy(links.userCategory)
         .limit(Math.ceil(limit / 3))
 
-      categorySuggestions.forEach(item => {
+      categorySuggestions.forEach((item: any) => {
         if (item.category && !suggestions.find(s => s.text === item.category)) {
           suggestions.push({
             text: item.category,
@@ -315,7 +315,7 @@ app.get('/suggestions', zValidator('query', suggestionsQuerySchema), async (c) =
       const statusCondition = eq(links.status, 'published')
       const domainWhereClause = and(ftsMatchCondition, statusCondition)
 
-      const domainSuggestions = await db
+      const domainSuggestions = await (db as any)
         .select({
           domain: links.domain,
           count: count()
@@ -326,7 +326,7 @@ app.get('/suggestions', zValidator('query', suggestionsQuerySchema), async (c) =
         .groupBy(links.domain)
         .limit(Math.ceil(limit / 4))
 
-      domainSuggestions.forEach(item => {
+      domainSuggestions.forEach((item: any) => {
         if (!suggestions.find(s => s.text === item.domain)) {
           suggestions.push({
             text: item.domain,
@@ -456,7 +456,7 @@ async function generateSearchSuggestions(
       ? and(ftsMatchCondition, ...baseConditions)
       : ftsMatchCondition
 
-    const titleSuggestions = await db
+    const titleSuggestions = await (db as any)
       .select({ title: links.title })
       .from(sql`links_fts`)
       .innerJoin(links, sql`links.id = links_fts.rowid`)
@@ -464,10 +464,10 @@ async function generateSearchSuggestions(
       .limit(20)
 
     // 基于编辑距离的简单相似度匹配
-    titleSuggestions.forEach(item => {
+    titleSuggestions.forEach((item: any) => {
       if (item.title) {
         const words = item.title.toLowerCase().split(/\s+/)
-        words.forEach(word => {
+        words.forEach((word: string) => {
           if (word.length >= 3 &&
             word !== q &&
             !suggestions.includes(word) &&
@@ -507,7 +507,7 @@ async function generateSearchSuggestions(
       ? and(ftsTagMatchCondition, ...baseConditions)
       : ftsTagMatchCondition
 
-    const tagData = await db
+    const tagData = await (db as any)
       .select({ tags: links.userTags })
       .from(sql`links_fts`)
       .innerJoin(links, sql`links.id = links_fts.rowid`)
@@ -515,7 +515,7 @@ async function generateSearchSuggestions(
       .limit(50)
 
     const tagCounts: { [key: string]: number } = {}
-    tagData.forEach(item => {
+    tagData.forEach((item: any) => {
       if (item.tags) {
         try {
           const tags = JSON.parse(item.tags) as string[]

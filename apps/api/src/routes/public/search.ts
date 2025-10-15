@@ -16,12 +16,12 @@ app.onError((err, c) => {
     error: err instanceof Error ? err.message : err,
     stack: err instanceof Error ? err.stack : undefined
   })
-  
+
   // zod验证错误
   if (err instanceof Error && (err.message.includes('ZodError') || err.name === 'ZodError')) {
     return sendError(c, 'VALIDATION_ERROR', 'Invalid request parameters', undefined, 400)
   }
-  
+
   return sendError(c, 'INTERNAL_SERVER_ERROR', 'An internal server error occurred', undefined, 500)
 })
 
@@ -30,23 +30,23 @@ app.get('/', zValidator('query', searchQuerySchema), async (c) => {
   try {
     const startTime = Date.now()
     const { q, page, limit, category, tags, domain, before, after, sort, highlight } = c.req.valid('query')
-    
+
     const offset = (page - 1) * limit
-    
+
     // 构建 FTS5 查询
     const ftsQuery = buildFTS5Query(q, tags)
-    
+
     // 构建额外的筛选条件
     let joinConditions: any[] = []
-    
+
     if (category) {
       joinConditions.push(eq(links.userCategory, category))
     }
-    
+
     if (domain) {
       joinConditions.push(eq(links.domain, domain))
     }
-    
+
     // 日期筛选
     const dateFilter = buildSearchDateFilter(before, after)
     if (dateFilter) {
@@ -57,14 +57,20 @@ app.get('/', zValidator('query', searchQuerySchema), async (c) => {
         joinConditions.push(sql`${links.publishedAt} <= ${dateFilter.end}`)
       }
     }
-    
+
     // 状态筛选 - 只搜索已发布的内容
     joinConditions.push(eq(links.status, 'published'))
-    
+
     const joinWhereClause = joinConditions.length > 0 ? and(...joinConditions) : undefined
-    
+
+    // 构建完整的查询条件
+    const ftsCondition = sql`links_fts MATCH ${ftsQuery}`
+    const combinedWhereClause = joinWhereClause
+      ? and(ftsCondition, joinWhereClause)
+      : ftsCondition
+
     // 构建基础查询
-    let baseQuery = db
+    const baseQuery = db
       .select({
         id: links.id,
         url: links.url,
@@ -80,51 +86,18 @@ app.get('/', zValidator('query', searchQuerySchema), async (c) => {
       })
       .from(sql`links_fts`)
       .innerJoin(links, sql`links.id = links_fts.rowid`)
-      .where(sql`links_fts MATCH ${ftsQuery}`)
-    
-    // 添加额外的筛选条件
-    if (joinWhereClause) {
-      // Instead of calling where twice, rebuild the query with combined conditions
-      const combinedWhereClause = and(sql`links_fts MATCH ${ftsQuery}`, joinWhereClause)
-      baseQuery = db
-        .select({
-          id: links.id,
-          url: links.url,
-          title: links.title,
-          description: links.userDescription,
-          category: links.userCategory,
-          tags: links.userTags,
-          domain: links.domain,
-          readingTime: links.aiReadingTime,
-          publishedAt: links.publishedAt,
-          createdAt: links.createdAt,
-          rank: sql`links_fts.rank`.as('rank')
-        })
-        .from(sql`links_fts`)
-        .innerJoin(links, sql`links.id = links_fts.rowid`)
-        .where(combinedWhereClause)
-    }
-    
+      .where(combinedWhereClause)
+
     // 获取总数 - 使用相同的查询条件
-    let countQuery = db
+    const countQuery = db
       .select({ count: count() })
       .from(sql`links_fts`)
       .innerJoin(links, sql`links.id = links_fts.rowid`)
-      .where(sql`links_fts MATCH ${ftsQuery}`)
-    
-    if (joinWhereClause) {
-      // Instead of calling where twice, rebuild the query with combined conditions
-      const combinedWhereClause = and(sql`links_fts MATCH ${ftsQuery}`, joinWhereClause)
-      countQuery = db
-        .select({ count: count() })
-        .from(sql`links_fts`)
-        .innerJoin(links, sql`links.id = links_fts.rowid`)
-        .where(combinedWhereClause)
-    }
-    
+      .where(combinedWhereClause)
+
     const totalResult = await countQuery
     const total = totalResult[0].count
-    
+
     // 构建排序
     let orderBy: any
     switch (sort) {
@@ -137,13 +110,13 @@ app.get('/', zValidator('query', searchQuerySchema), async (c) => {
       default: // relevance - 使用 FTS5 的内置排序
         orderBy = sql`links_fts.rank`
     }
-    
+
     // 获取搜索结果
     const searchResult = await baseQuery
       .orderBy(orderBy)
       .limit(limit)
       .offset(offset)
-    
+
     // 格式化响应数据，添加搜索相关性和高亮
     let results: SearchResult[] = searchResult.map((link) => {
       const result: SearchResult = {
@@ -160,21 +133,21 @@ app.get('/', zValidator('query', searchQuerySchema), async (c) => {
         score: Math.abs(Number(link.rank) || 0), // FTS5 rank score (absolute value, lower is better)
         highlights: {}
       }
-      
+
       // 高亮处理和摘录生成
       if (highlight) {
         const searchRegex = new RegExp(`(${escapeRegex(q)})`, 'gi')
-        
+
         if (result.title.toLowerCase().includes(q.toLowerCase())) {
           result.highlights.title = result.title.replace(searchRegex, '<mark>$1</mark>')
         }
-        
+
         // 生成高亮的描述摘录
         if (result.description.toLowerCase().includes(q.toLowerCase())) {
           const snippet = generateSnippet(result.description, q, 200)
           result.highlights.description = snippet.replace(searchRegex, '<mark>$1</mark>')
         }
-        
+
         // 标签高亮
         if (result.tags.some(tag => tag.toLowerCase().includes(q.toLowerCase()))) {
           result.highlights.tags = result.tags.map(tag => {
@@ -185,12 +158,12 @@ app.get('/', zValidator('query', searchQuerySchema), async (c) => {
           })
         }
       }
-      
+
       return result
     })
 
     // FTS5 已经提供了最佳的相关性排序，无需额外处理
-    
+
     const pages = Math.ceil(total / limit)
     const totalTime = Date.now() - startTime
 
@@ -199,7 +172,7 @@ app.get('/', zValidator('query', searchQuerySchema), async (c) => {
     if (total < 5 && page === 1) {
       suggestions = await generateSearchSuggestions(q, category, domain)
     }
-    
+
     const responseData: SearchResponse = {
       results,
       pagination: {
@@ -224,9 +197,9 @@ app.get('/', zValidator('query', searchQuerySchema), async (c) => {
       suggestions,
       totalTime
     }
-    
+
     return sendSuccess(c, responseData)
-    
+
   } catch (error) {
     apiLogger.error('Error searching links', {
       query: c.req.query('q'),
@@ -241,24 +214,23 @@ app.get('/', zValidator('query', searchQuerySchema), async (c) => {
 app.get('/suggestions', zValidator('query', suggestionsQuerySchema), async (c) => {
   try {
     const { q, type, limit } = c.req.valid('query')
-    
+
     const suggestions: Suggestion[] = []
     const searchTerm = q.toLowerCase()
-    
+
     if (!type || type === 'title') {
       // 使用 FTS5 从标题中查找建议
+      const ftsMatchCondition = sql`links_fts MATCH ${q}`
+      const statusCondition = eq(links.status, 'published')
+      const titleWhereClause = and(ftsMatchCondition, statusCondition)
+
       const titleSuggestions = await db
         .select({ title: links.title })
         .from(sql`links_fts`)
         .innerJoin(links, sql`links.id = links_fts.rowid`)
-        .where(
-          and(
-            sql`links_fts MATCH ${q}`,
-            eq(links.status, 'published')
-          )
-        )
+        .where(titleWhereClause)
         .limit(Math.ceil(limit / 3)) // 为每种类型分配部分配额
-      
+
       titleSuggestions.forEach(item => {
         if (item.title && !suggestions.find(s => s.text === item.title)) {
           suggestions.push({
@@ -269,25 +241,24 @@ app.get('/suggestions', zValidator('query', suggestionsQuerySchema), async (c) =
         }
       })
     }
-    
+
     if (!type || type === 'category') {
       // 使用 FTS5 从分类中查找建议
+      const ftsMatchCondition = sql`links_fts MATCH ${q}`
+      const statusCondition = eq(links.status, 'published')
+      const categoryWhereClause = and(ftsMatchCondition, statusCondition)
+
       const categorySuggestions = await db
-        .select({ 
+        .select({
           category: links.userCategory,
           count: count()
         })
         .from(sql`links_fts`)
         .innerJoin(links, sql`links.id = links_fts.rowid`)
-        .where(
-          and(
-            sql`links_fts MATCH ${q}`,
-            eq(links.status, 'published')
-          )
-        )
+        .where(categoryWhereClause)
         .groupBy(links.userCategory)
         .limit(Math.ceil(limit / 3))
-      
+
       categorySuggestions.forEach(item => {
         if (item.category && !suggestions.find(s => s.text === item.category)) {
           suggestions.push({
@@ -298,12 +269,12 @@ app.get('/suggestions', zValidator('query', suggestionsQuerySchema), async (c) =
         }
       })
     }
-    
+
     if (!type || type === 'tag') {
       // 从标签中查找建议
       const tagData = await db
-        .select({ 
-          tags: links.userTags 
+        .select({
+          tags: links.userTags
         })
         .from(links)
         .where(eq(links.status, 'published'))
@@ -340,6 +311,10 @@ app.get('/suggestions', zValidator('query', suggestionsQuerySchema), async (c) =
 
     if (!type || type === 'domain') {
       // 使用 FTS5 从域名中查找建议
+      const ftsMatchCondition = sql`links_fts MATCH ${q}`
+      const statusCondition = eq(links.status, 'published')
+      const domainWhereClause = and(ftsMatchCondition, statusCondition)
+
       const domainSuggestions = await db
         .select({
           domain: links.domain,
@@ -347,15 +322,10 @@ app.get('/suggestions', zValidator('query', suggestionsQuerySchema), async (c) =
         })
         .from(sql`links_fts`)
         .innerJoin(links, sql`links.id = links_fts.rowid`)
-        .where(
-          and(
-            sql`links_fts MATCH ${q}`,
-            eq(links.status, 'published')
-          )
-        )
+        .where(domainWhereClause)
         .groupBy(links.domain)
         .limit(Math.ceil(limit / 4))
-      
+
       domainSuggestions.forEach(item => {
         if (!suggestions.find(s => s.text === item.domain)) {
           suggestions.push({
@@ -366,26 +336,26 @@ app.get('/suggestions', zValidator('query', suggestionsQuerySchema), async (c) =
         }
       })
     }
-    
+
     // 按相关性和计数排序，限制数量
     const sortedSuggestions = suggestions
       .sort((a, b) => {
         // 优先显示完全匹配的建议
         const aStartsWith = a.text.toLowerCase().startsWith(searchTerm)
         const bStartsWith = b.text.toLowerCase().startsWith(searchTerm)
-        
+
         if (aStartsWith && !bStartsWith) return -1
         if (!aStartsWith && bStartsWith) return 1
-        
+
         // 然后按使用次数排序
         return (b.count || 0) - (a.count || 0)
       })
       .slice(0, limit)
-    
+
     return sendSuccess(c, {
       suggestions: sortedSuggestions
     })
-    
+
   } catch (error) {
     apiLogger.error('Error getting search suggestions', {
       query: c.req.query('q'),
@@ -401,17 +371,17 @@ app.get('/suggestions', zValidator('query', suggestionsQuerySchema), async (c) =
 function buildFTS5Query(query: string, tags?: string): string {
   // 转义 FTS5 特殊字符
   let escapedQuery = query.replace(/['"]/g, '""')
-  
+
   // 构建基础查询
   let ftsQuery = `"${escapedQuery}"`
-  
+
   // 如果有标签筛选，添加到 FTS5 查询中
   if (tags) {
     const tagList = tags.split(',').map(t => t.trim())
     const tagQueries = tagList.map(tag => `"${tag.replace(/['"]/g, '""')}"`).join(' OR ')
     ftsQuery = `(${ftsQuery}) AND (${tagQueries})`
   }
-  
+
   return ftsQuery
 }
 
@@ -425,20 +395,20 @@ function generateSnippet(text: string, query: string, maxLength: number = 200): 
   if (!text || text.length <= maxLength) {
     return text
   }
-  
+
   const queryLower = query.toLowerCase()
   const textLower = text.toLowerCase()
   const queryIndex = textLower.indexOf(queryLower)
-  
+
   if (queryIndex === -1) {
     // 如果没有找到查询词，返回开头部分
     return text.substring(0, maxLength) + '...'
   }
-  
+
   // 计算摘录的开始位置，尽量让查询词居中
   const contextLength = Math.floor((maxLength - query.length) / 2)
   let start = Math.max(0, queryIndex - contextLength)
-  
+
   // 尽量在单词边界开始
   if (start > 0) {
     const spaceIndex = text.indexOf(' ', start)
@@ -446,9 +416,9 @@ function generateSnippet(text: string, query: string, maxLength: number = 200): 
       start = spaceIndex + 1
     }
   }
-  
+
   let snippet = text.substring(start, start + maxLength)
-  
+
   // 尽量在单词边界结束
   if (start + maxLength < text.length) {
     const lastSpaceIndex = snippet.lastIndexOf(' ')
@@ -457,40 +427,40 @@ function generateSnippet(text: string, query: string, maxLength: number = 200): 
     }
     snippet += '...'
   }
-  
+
   // 如果不是从开头开始，添加省略号
   if (start > 0) {
     snippet = '...' + snippet
   }
-  
+
   return snippet
 }
 
 // 工具函数：生成搜索建议
 async function generateSearchSuggestions(
-  query: string, 
-  category?: string, 
+  query: string,
+  category?: string,
   domain?: string
 ): Promise<string[]> {
   const suggestions: string[] = []
   const q = query.toLowerCase()
-  
+
   try {
     // 使用 FTS5 查找相似的标题
     let baseConditions = [eq(links.status, 'published')]
     if (category) baseConditions.push(eq(links.userCategory, category))
     if (domain) baseConditions.push(eq(links.domain, domain))
-    
+
+    const ftsMatchCondition = sql`links_fts MATCH ${buildFTS5Query(q)}`
+    const titleWhereClause = baseConditions.length > 0
+      ? and(ftsMatchCondition, ...baseConditions)
+      : ftsMatchCondition
+
     const titleSuggestions = await db
       .select({ title: links.title })
       .from(sql`links_fts`)
       .innerJoin(links, sql`links.id = links_fts.rowid`)
-      .where(
-        and(
-          sql`links_fts MATCH ${buildFTS5Query(q)}`,
-          ...baseConditions
-        )
-      )
+      .where(titleWhereClause)
       .limit(20)
 
     // 基于编辑距离的简单相似度匹配
@@ -498,11 +468,11 @@ async function generateSearchSuggestions(
       if (item.title) {
         const words = item.title.toLowerCase().split(/\s+/)
         words.forEach(word => {
-          if (word.length >= 3 && 
-              word !== q && 
-              !suggestions.includes(word) &&
-              (word.includes(q) || q.includes(word) || 
-               calculateEditDistance(word, q) <= 2)) {
+          if (word.length >= 3 &&
+            word !== q &&
+            !suggestions.includes(word) &&
+            (word.includes(q) || q.includes(word) ||
+              calculateEditDistance(word, q) <= 2)) {
             suggestions.push(word)
           }
         })
@@ -512,7 +482,7 @@ async function generateSearchSuggestions(
     // 查找常用分类
     if (!category) {
       const categoryData = await db
-        .select({ 
+        .select({
           category: links.userCategory,
           count: count()
         })
@@ -523,25 +493,25 @@ async function generateSearchSuggestions(
         .limit(5)
 
       categoryData.forEach(item => {
-        if (item.category && 
-            item.category.toLowerCase().includes(q) &&
-            !suggestions.includes(item.category)) {
+        if (item.category &&
+          item.category.toLowerCase().includes(q) &&
+          !suggestions.includes(item.category)) {
           suggestions.push(item.category)
         }
       })
     }
 
     // 使用 FTS5 查找常用标签
+    const ftsTagMatchCondition = sql`links_fts MATCH ${buildFTS5Query(q)}`
+    const tagWhereClause = baseConditions.length > 0
+      ? and(ftsTagMatchCondition, ...baseConditions)
+      : ftsTagMatchCondition
+
     const tagData = await db
       .select({ tags: links.userTags })
       .from(sql`links_fts`)
       .innerJoin(links, sql`links.id = links_fts.rowid`)
-      .where(
-        and(
-          sql`links_fts MATCH ${buildFTS5Query(q)}`,
-          ...baseConditions
-        )
-      )
+      .where(tagWhereClause)
       .limit(50)
 
     const tagCounts: { [key: string]: number } = {}
@@ -550,9 +520,9 @@ async function generateSearchSuggestions(
         try {
           const tags = JSON.parse(item.tags) as string[]
           tags.forEach(tag => {
-            if (tag.toLowerCase().includes(q) || 
-                q.includes(tag.toLowerCase()) ||
-                calculateEditDistance(tag.toLowerCase(), q) <= 2) {
+            if (tag.toLowerCase().includes(q) ||
+              q.includes(tag.toLowerCase()) ||
+              calculateEditDistance(tag.toLowerCase(), q) <= 2) {
               tagCounts[tag] = (tagCounts[tag] || 0) + 1
             }
           })
@@ -580,7 +550,7 @@ async function generateSearchSuggestions(
       stack: error instanceof Error ? error.stack : undefined
     })
   }
-  
+
   return suggestions.slice(0, 5) // 最多返回5个建议
 }
 
@@ -588,19 +558,19 @@ async function generateSearchSuggestions(
 function calculateEditDistance(str1: string, str2: string): number {
   if (str1.length === 0) return str2.length
   if (str2.length === 0) return str1.length
-  
-  const matrix = Array(str2.length + 1).fill(null).map(() => 
+
+  const matrix = Array(str2.length + 1).fill(null).map(() =>
     Array(str1.length + 1).fill(null)
   )
-  
+
   for (let i = 0; i <= str1.length; i++) {
     matrix[0][i] = i
   }
-  
+
   for (let j = 0; j <= str2.length; j++) {
     matrix[j][0] = j
   }
-  
+
   for (let j = 1; j <= str2.length; j++) {
     for (let i = 1; i <= str1.length; i++) {
       if (str1[i - 1] === str2[j - 1]) {
@@ -614,7 +584,7 @@ function calculateEditDistance(str1: string, str2: string): number {
       }
     }
   }
-  
+
   return matrix[str2.length][str1.length]
 }
 

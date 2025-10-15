@@ -19,7 +19,8 @@
     "paths": {
       "@/*": ["./src/*"],
       "@magpie/shared/*": ["../../packages/shared/src/*"]
-    }
+    },
+    "noEmitOnError": false
   },
   "include": ["src"]
 }

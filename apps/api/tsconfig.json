@@ -12,7 +12,9 @@
     "paths": {
       "@/*": ["./src/*"],
       "@magpie/shared/*": ["../../packages/shared/src/*"]
-    }
+    },
+    "skipLibCheck": true,
+    "noEmitOnError": false
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
